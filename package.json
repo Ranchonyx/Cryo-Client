@@ -1,0 +1,32 @@
+{
+  "name": "cryo-client",
+  "version": "1.0.1",
+  "keywords": [],
+  "license": "ISC",
+  "description": "",
+  "author": {
+    "name": "Ranchonyx",
+    "url": "https://fjanetzki.nrw",
+    "email": "info@fjanetzki.nrw"
+  },
+  "repository": {
+    "url": "https://github.com/Ranchonyx/Cryo-Client"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/typings/index.d.ts"
+    }
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^22.4.1",
+    "@types/ws": "^8.5.12"
+  },
+  "scripts": {
+    "prepare": "tsc"
+  }
+}
