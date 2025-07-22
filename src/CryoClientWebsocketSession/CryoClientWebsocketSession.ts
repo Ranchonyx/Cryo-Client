@@ -238,12 +238,11 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     }
 
     private static async ConstructSocket(host: string, timeout: number, bearer: string, sid: string): Promise<WebSocket> {
-        const sck = new WebSocket(host, {
-            headers: {
-                authorization: `Bearer ${bearer}`,
-                "x-cryo-sid": sid
-            }
-        })
+        const full_host_url = new URL(host);
+        full_host_url.searchParams.set("authorization", `Bearer ${bearer}`);
+        full_host_url.searchParams.set("x-cryo-sid", sid);
+
+        const sck = new WebSocket(full_host_url);
 
         return new Promise<WebSocket>((resolve, reject) => {
             setTimeout(() => {

@@ -1,6 +1,6 @@
 {
   "name": "cryo-client",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "keywords": [],
   "license": "ISC",
   "description": "",
@@ -14,19 +14,17 @@
   },
   "exports": {
     ".": {
-      "import": "./dist/index.js",
+      "import": "./dist/lib/index.js",
       "types": "./dist/typings/index.d.ts"
     }
   },
-  "dependencies": {
-    "ws": "^8.18.0"
-  },
   "type": "module",
-  "devDependencies": {
-    "@types/node": "^22.4.1",
-    "@types/ws": "^8.5.12"
-  },
   "scripts": {
     "prepare": "tsc"
+  },
+  "dependencies": {
+    "@types/node": "^24.0.15",
+    "@types/ws": "^8.18.1",
+    "ws": "^8.18.3"
   }
 }
