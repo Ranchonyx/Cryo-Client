@@ -228,7 +228,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
 
         this.AttachListenersToSocket(socket);
 
-        this.emit("connected");
+        setImmediate(() => this.emit("connected"));
     }
 
     private AttachListenersToSocket(socket: WebSocket) {

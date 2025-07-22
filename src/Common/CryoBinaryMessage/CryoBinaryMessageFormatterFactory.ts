@@ -235,7 +235,7 @@ export default class CryoBinaryMessageFormatterFactory {
     public static GetFormatter(type: BinaryMessageType.UTF8DATA | BinaryMessageType.PING_PONG | BinaryMessageType.ACK | BinaryMessageType.ERROR | BinaryMessageType.BINARYDATA): CryoBinaryMessageFormatter<any>;
     public static GetFormatter(type: string | BinaryMessageType): CryoBinaryMessageFormatter<CryoAllBinaryMessage> {
         switch (type) {
-            case "data":
+            case "utf8data":
             case BinaryMessageType.UTF8DATA:
                 return new UTF8DataMessageFormatter();
             case "error":

@@ -1,6 +1,6 @@
 {
   "name": "cryo-client",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "keywords": [],
   "license": "ISC",
   "description": "",
@@ -23,8 +23,10 @@
     "prepare": "tsc"
   },
   "dependencies": {
-    "@types/node": "^24.0.15",
-    "@types/ws": "^8.18.1",
     "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.15",
+    "@types/ws": "^8.18.1"
   }
 }

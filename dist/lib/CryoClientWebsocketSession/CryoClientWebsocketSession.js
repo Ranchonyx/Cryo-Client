@@ -190,7 +190,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
         this.bearer = bearer;
         this.log = log;
         this.AttachListenersToSocket(socket);
-        this.emit("connected");
+        setImmediate(() => this.emit("connected"));
     }
     AttachListenersToSocket(socket) {
         socket.on("message", this.HandleIncomingBinaryMessage.bind(this));
@@ -198,12 +198,10 @@ export class CryoClientWebsocketSession extends EventEmitter {
         socket.on("close", this.HandleClose.bind(this));
     }
     static async ConstructSocket(host, timeout, bearer, sid) {
-        const sck = new WebSocket(host, {
-            headers: {
-                authorization: `Bearer ${bearer}`,
-                "x-cryo-sid": sid
-            }
-        });
+        const full_host_url = new URL(host);
+        full_host_url.searchParams.set("authorization", `Bearer ${bearer}`);
+        full_host_url.searchParams.set("x-cryo-sid", sid);
+        const sck = new WebSocket(full_host_url);
         return new Promise((resolve, reject) => {
             setTimeout(() => {
                 if (sck.readyState !== WebSocket.OPEN)

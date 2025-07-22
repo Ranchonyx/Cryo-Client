@@ -148,7 +148,7 @@ class ErrorMessageFormatter {
 export default class CryoBinaryMessageFormatterFactory {
     static GetFormatter(type) {
         switch (type) {
-            case "data":
+            case "utf8data":
             case BinaryMessageType.UTF8DATA:
                 return new UTF8DataMessageFormatter();
             case "error":
