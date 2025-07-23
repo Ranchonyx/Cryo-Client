@@ -112,10 +112,14 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
 
         this.HandleOutgoingBinaryMessage(encodedAckMessage);
 
-        if (sender_sid !== this.sid)
-            this.emit("message-utf8", payload);
-        else
-            this.log("Dropped self-originated DATA message")
+        /*
+                if (sender_sid !== this.sid)
+        */
+        this.emit("message-utf8", payload);
+        /*
+                else
+                    this.log("Dropped self-originated DATA message")
+        */
     }
 
     /*
@@ -135,10 +139,14 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
 
         this.HandleOutgoingBinaryMessage(encodedAckMessage);
 
-        if (sender_sid !== this.sid)
-            this.emit("message-binary", payload);
-        else
-            this.log("Dropped self-originated DATA message")
+        /*
+                if (sender_sid !== this.sid)
+        */
+        this.emit("message-binary", payload);
+        /*
+                else
+                    this.log("Dropped self-originated DATA message")
+        */
     }
 
 

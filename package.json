@@ -10,7 +10,7 @@
     "email": "info@fjanetzki.nrw"
   },
   "repository": {
-    "url": "https://github.com/Ranchonyx/Cryo-Client"
+    "url": "git+https://github.com/Ranchonyx/Cryo-Client.git"
   },
   "exports": {
     ".": {
