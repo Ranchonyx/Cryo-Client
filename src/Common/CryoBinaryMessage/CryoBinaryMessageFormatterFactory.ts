@@ -177,7 +177,7 @@ class BinaryDataMessageFormatter implements CryoBinaryMessageFormatter<BinaryDat
 
         sid_buf.copy(msg_buf, 0);
         msg_buf.writeUInt32BE(ack, 16);
-        msg_buf.writeUint8(BinaryMessageType.UTF8DATA, 20);
+        msg_buf.writeUint8(BinaryMessageType.BINARYDATA, 20);
         msg_buf.set(payload || Buffer.from("null", "utf-8"), 21);
 
         return msg_buf;
