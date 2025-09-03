@@ -35,7 +35,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     private constructor(private host: string, private sid: UUID, private socket: WebSocket, private timeout: number, private bearer: string, private log: DebugLoggerFunction = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
         super();
         this.AttachListenersToSocket(socket);
-
+        this.ecdh.generateKeys();
     }
 
     private AttachListenersToSocket(socket: WebSocket) {
@@ -100,7 +100,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
                 this.HandleError(maybe_error);
         });
 
-        this.log(`Sent ${CryoFrameInspector.Inspect(message)} to server.`);
+        this.log(`Sent ${CryoFrameInspector.Inspect(ougoing_message)} to server.`);
     }
 
     /*
@@ -196,8 +196,8 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
             .update(secret)
             .digest();
 
-        const send_key = hash.subarray(0, 16);
-        const recv_key = hash.subarray(16, 32);
+        const recv_key = hash.subarray(0, 16);
+        const send_key = hash.subarray(16, 32);
 
         this.l_crypto = new PerSessionCryptoHelper(send_key, recv_key);
         const encodedAckMessage = this.ack_formatter

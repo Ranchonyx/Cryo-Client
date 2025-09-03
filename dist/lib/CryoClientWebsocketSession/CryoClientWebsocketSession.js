@@ -35,6 +35,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
         this.bearer = bearer;
         this.log = log;
         this.AttachListenersToSocket(socket);
+        this.ecdh.generateKeys();
     }
     AttachListenersToSocket(socket) {
         socket.on("message", this.HandleIncomingBinaryMessage.bind(this));
@@ -87,7 +88,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
             if (maybe_error)
                 this.HandleError(maybe_error);
         });
-        this.log(`Sent ${CryoFrameInspector.Inspect(message)} to server.`);
+        this.log(`Sent ${CryoFrameInspector.Inspect(ougoing_message)} to server.`);
     }
     /*
     * Respond to PONG frames with PING and vice versa
@@ -159,8 +160,8 @@ export class CryoClientWebsocketSession extends EventEmitter {
         const hash = createHash("sha256")
             .update(secret)
             .digest();
-        const send_key = hash.subarray(0, 16);
-        const recv_key = hash.subarray(16, 32);
+        const recv_key = hash.subarray(0, 16);
+        const send_key = hash.subarray(16, 32);
         this.l_crypto = new PerSessionCryptoHelper(send_key, recv_key);
         const encodedAckMessage = this.ack_formatter
             .Serialize(this.sid, decoded.ack);
