@@ -1,10 +1,11 @@
 import EventEmitter from "node:events";
 import { AckTracker } from "../Common/AckTracker/AckTracker.js";
-import CryoBinaryMessageFormatterFactory, { BinaryMessageType } from "../Common/CryoBinaryMessage/CryoBinaryMessageFormatterFactory.js";
+import CryoFrameFormatter, { BinaryMessageType } from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
 import { CryoFrameInspector } from "../Common/CryoFrameInspector/CryoFrameInspector.js";
-import { randomUUID } from "node:crypto";
+import { createECDH, createHash, randomUUID } from "node:crypto";
 import { CreateDebugLogger } from "../Common/Util/CreateDebugLogger.js";
 import WebSocket from "ws";
+import { PerSessionCryptoHelper } from "../Common/CryptoHelper/CryptoHelper.js";
 /*
 * Cryo Websocket session layer. Handles Binary formatting and ACKs and whatnot
 * */
@@ -18,24 +19,70 @@ export class CryoClientWebsocketSession extends EventEmitter {
     messages_pending_server_ack = new Map();
     server_ack_tracker = new AckTracker();
     current_ack = 0;
-    ping_pong_formatter = CryoBinaryMessageFormatterFactory.GetFormatter("ping_pong");
-    ack_formatter = CryoBinaryMessageFormatterFactory.GetFormatter("ack");
-    error_formatter = CryoBinaryMessageFormatterFactory.GetFormatter("error");
-    utf8_formatter = CryoBinaryMessageFormatterFactory.GetFormatter("utf8data");
-    binary_formatter = CryoBinaryMessageFormatterFactory.GetFormatter("binarydata");
+    ping_pong_formatter = CryoFrameFormatter.GetFormatter("ping_pong");
+    ack_formatter = CryoFrameFormatter.GetFormatter("ack");
+    error_formatter = CryoFrameFormatter.GetFormatter("error");
+    utf8_formatter = CryoFrameFormatter.GetFormatter("utf8data");
+    binary_formatter = CryoFrameFormatter.GetFormatter("binarydata");
+    ecdh = createECDH("prime256v1");
+    l_crypto = null;
+    constructor(host, sid, socket, timeout, bearer, log = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
+        super();
+        this.host = host;
+        this.sid = sid;
+        this.socket = socket;
+        this.timeout = timeout;
+        this.bearer = bearer;
+        this.log = log;
+        this.AttachListenersToSocket(socket);
+    }
+    AttachListenersToSocket(socket) {
+        socket.on("message", this.HandleIncomingBinaryMessage.bind(this));
+        setImmediate(() => this.emit("connected"));
+        /*
+                socket.on("message", this.HandleIncomingBinaryMessage.bind(this));
+        */
+        socket.on("error", this.HandleError.bind(this));
+        socket.on("close", this.HandleClose.bind(this));
+    }
+    static async ConstructSocket(host, timeout, bearer, sid) {
+        const full_host_url = new URL(host);
+        full_host_url.searchParams.set("authorization", `Bearer ${bearer}`);
+        full_host_url.searchParams.set("x-cryo-sid", sid);
+        const sck = new WebSocket(full_host_url);
+        return new Promise((resolve, reject) => {
+            setTimeout(() => {
+                if (sck.readyState !== WebSocket.OPEN)
+                    reject(new Error(`Connection timeout of ${timeout} ms reached!`));
+            }, timeout);
+            sck.addEventListener("open", () => {
+                sck.removeAllListeners("error");
+                resolve(sck);
+            });
+            sck.addEventListener("error", (err) => {
+                reject(new Error(`Error during session initialisation!`, { cause: err }));
+            });
+        });
+    }
+    static async Connect(host, bearer, timeout = 5000) {
+        const sid = randomUUID();
+        const socket = await CryoClientWebsocketSession.ConstructSocket(host, timeout, bearer, sid);
+        return new CryoClientWebsocketSession(host, sid, socket, timeout, bearer);
+    }
     /*
     * Handle an outgoing binary message
     * */
-    HandleOutgoingBinaryMessage(message) {
+    HandleOutgoingBinaryMessage(ougoing_message) {
         //Create a pending message with a new ack number and queue it for acknowledgement by the server
-        const message_ack = CryoBinaryMessageFormatterFactory.GetAck(message);
+        const message_ack = CryoFrameFormatter.GetAck(ougoing_message);
         this.server_ack_tracker.Track(message_ack, {
             timestamp: Date.now(),
-            message
+            message: ougoing_message
         });
         //Send the message buffer to the server
         if (!this.socket)
             return;
+        const message = this.secure ? this.l_crypto.encrypt(ougoing_message) : ougoing_message;
         this.socket.send(message, (maybe_error) => {
             if (maybe_error)
                 this.HandleError(maybe_error);
@@ -45,7 +92,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
     /*
     * Respond to PONG frames with PING and vice versa
     * */
-    HandlePingPongMessage(message) {
+    async HandlePingPongMessage(message) {
         const decodedPingPongMessage = this.ping_pong_formatter
             .Deserialize(message);
         const ping_pongMessage = this.ping_pong_formatter
@@ -55,7 +102,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
     /*
     * Handling of binary error messages from the server, currently just log it
     * */
-    HandleErrorMessage(message) {
+    async HandleErrorMessage(message) {
         const decodedErrorMessage = this.error_formatter
             .Deserialize(message);
         this.log(decodedErrorMessage.payload);
@@ -78,7 +125,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
     /*
     * Extract payload from the binary message and emit the message event with the utf8 payload
     * */
-    HandleUTF8DataMessage(message) {
+    async HandleUTF8DataMessage(message) {
         const decodedDataMessage = this.utf8_formatter
             .Deserialize(message);
         const payload = decodedDataMessage.payload;
@@ -90,7 +137,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
     /*
     * Extract payload from the binary message and emit the message event with the utf8 payload
     * */
-    HandleBinaryDataMessage(message) {
+    async HandleBinaryDataMessage(message) {
         const decodedDataMessage = this.binary_formatter
             .Deserialize(message);
         const payload = decodedDataMessage.payload;
@@ -99,27 +146,49 @@ export class CryoClientWebsocketSession extends EventEmitter {
         this.HandleOutgoingBinaryMessage(encodedAckMessage);
         this.emit("message-binary", payload);
     }
+    async HandleKeyExchangeMessage(message) {
+        const decoded = CryoFrameFormatter
+            .GetFormatter("kexchg")
+            .Deserialize(message);
+        const server_pub_key = decoded.payload;
+        const secret = this.ecdh.computeSecret(server_pub_key);
+        //Make two aes128 hashes from the secret
+        const hash = createHash("sha256")
+            .update(secret)
+            .digest();
+        const send_key = hash.subarray(0, 16);
+        const recv_key = hash.subarray(16, 32);
+        this.l_crypto = new PerSessionCryptoHelper(send_key, recv_key);
+        const encodedAckMessage = this.ack_formatter
+            .Serialize(this.sid, decoded.ack);
+        this.HandleOutgoingBinaryMessage(encodedAckMessage);
+        this.log("Derived session keys, encryption now enabled.");
+    }
     /*
     * Handle incoming binary messages
     * */
-    async HandleIncomingBinaryMessage(message) {
-        const message_type = CryoBinaryMessageFormatterFactory.GetType(message);
+    async HandleIncomingBinaryMessage(incoming_message) {
+        const message = this.secure ? this.l_crypto.decrypt(incoming_message) : incoming_message;
+        const message_type = CryoFrameFormatter.GetType(message);
         this.log(`Received ${CryoFrameInspector.Inspect(message)} from server.`);
         switch (message_type) {
             case BinaryMessageType.PING_PONG:
-                this.HandlePingPongMessage(message);
+                await this.HandlePingPongMessage(message);
                 return;
             case BinaryMessageType.ERROR:
-                this.HandleErrorMessage(message);
+                await this.HandleErrorMessage(message);
                 return;
             case BinaryMessageType.ACK:
                 await this.HandleAckMessage(message);
                 return;
             case BinaryMessageType.UTF8DATA:
-                this.HandleUTF8DataMessage(message);
+                await this.HandleUTF8DataMessage(message);
                 return;
             case BinaryMessageType.BINARYDATA:
-                this.HandleBinaryDataMessage(message);
+                await this.HandleBinaryDataMessage(message);
+                return;
+            case BinaryMessageType.KEXCHG:
+                await this.HandleKeyExchangeMessage(message);
                 return;
             default:
                 throw new Error(`Handle binary message type ${message_type}!`);
@@ -171,52 +240,12 @@ export class CryoClientWebsocketSession extends EventEmitter {
             this.socket.terminate();
         this.emit("closed", code, reason.toString("utf8"));
     }
-    constructor(host, sid, socket, timeout, bearer, log = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
-        super();
-        this.host = host;
-        this.sid = sid;
-        this.socket = socket;
-        this.timeout = timeout;
-        this.bearer = bearer;
-        this.log = log;
-        this.AttachListenersToSocket(socket);
-        setImmediate(() => this.emit("connected"));
-    }
-    AttachListenersToSocket(socket) {
-        socket.on("message", this.HandleIncomingBinaryMessage.bind(this));
-        socket.on("error", this.HandleError.bind(this));
-        socket.on("close", this.HandleClose.bind(this));
-    }
-    static async ConstructSocket(host, timeout, bearer, sid) {
-        const full_host_url = new URL(host);
-        full_host_url.searchParams.set("authorization", `Bearer ${bearer}`);
-        full_host_url.searchParams.set("x-cryo-sid", sid);
-        const sck = new WebSocket(full_host_url);
-        return new Promise((resolve, reject) => {
-            setTimeout(() => {
-                if (sck.readyState !== WebSocket.OPEN)
-                    reject(new Error(`Connection timeout of ${timeout} ms reached!`));
-            }, timeout);
-            sck.addEventListener("open", () => {
-                sck.removeAllListeners("error");
-                resolve(sck);
-            });
-            sck.addEventListener("error", (err) => {
-                reject(new Error(`Error during session initialisation!`, { cause: err }));
-            });
-        });
-    }
-    static async Connect(host, bearer, timeout = 5000) {
-        const sid = randomUUID();
-        const socket = await CryoClientWebsocketSession.ConstructSocket(host, timeout, bearer, sid);
-        return new CryoClientWebsocketSession(host, sid, socket, timeout, bearer);
-    }
     /*
     * Send an utf8 message to the server
     * */
     SendUTF8(message) {
         const new_ack_id = this.current_ack++;
-        const formatted_message = CryoBinaryMessageFormatterFactory
+        const formatted_message = CryoFrameFormatter
             .GetFormatter("utf8data")
             .Serialize(this.sid, new_ack_id, message);
         this.HandleOutgoingBinaryMessage(formatted_message);
@@ -226,10 +255,13 @@ export class CryoClientWebsocketSession extends EventEmitter {
     * */
     SendBinary(message) {
         const new_ack_id = this.current_ack++;
-        const formatted_message = CryoBinaryMessageFormatterFactory
+        const formatted_message = CryoFrameFormatter
             .GetFormatter("binarydata")
             .Serialize(this.sid, new_ack_id, message);
         this.HandleOutgoingBinaryMessage(formatted_message);
+    }
+    get secure() {
+        return this.l_crypto !== null;
     }
     get session_id() {
         return this.sid;

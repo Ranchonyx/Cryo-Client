@@ -5,7 +5,8 @@ const typeToStringMap = {
     1: "ack",
     2: "ping/pong",
     3: "error",
-    4: "binarydata"
+    4: "binarydata",
+    5: "kexchg"
 }
 
 export class CryoFrameInspector {
