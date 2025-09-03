@@ -25,6 +25,9 @@ export class CryoClientWebsocketSession extends EventEmitter {
     utf8_formatter = CryoFrameFormatter.GetFormatter("utf8data");
     binary_formatter = CryoFrameFormatter.GetFormatter("binarydata");
     ecdh = createECDH("prime256v1");
+    recv_key = null;
+    send_key = null;
+    l_crypto_ack = null;
     l_crypto = null;
     constructor(host, sid, socket, timeout, bearer, log = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
         super();
@@ -121,6 +124,11 @@ export class CryoClientWebsocketSession extends EventEmitter {
             return;
         }
         this.messages_pending_server_ack.delete(ack_id);
+        if (this.l_crypto_ack && ack_id === this.l_crypto_ack) {
+            this.l_crypto = new PerSessionCryptoHelper(this.send_key, this.recv_key);
+            this.l_crypto_ack = null;
+            this.log("Got KEX Ack, enabling encryption.");
+        }
         this.log(`Got ACK ${ack_id} from server.`);
     }
     /*
@@ -152,21 +160,30 @@ export class CryoClientWebsocketSession extends EventEmitter {
             .GetFormatter("kexchg")
             .Deserialize(message);
         const server_pub_key = decoded.payload;
+        //Basic key checks
         if (server_pub_key.length !== 65 || server_pub_key[0] !== 0x04) {
             throw new Error(`Invalid server public key. Got ${server_pub_key.byteLength} bytes.`);
         }
+        //Derive keys
         const secret = this.ecdh.computeSecret(server_pub_key);
-        //Make two aes128 hashes from the secret
         const hash = createHash("sha256")
             .update(secret)
             .digest();
-        const recv_key = hash.subarray(0, 16);
-        const send_key = hash.subarray(16, 32);
-        this.l_crypto = new PerSessionCryptoHelper(send_key, recv_key);
+        //We sent with second half, receive with first half (opposite of server)
+        this.recv_key = hash.subarray(0, 16);
+        this.send_key = hash.subarray(16, 32);
+        //Ack the server's KEX without being encrypted yet
         const encodedAckMessage = this.ack_formatter
             .Serialize(this.sid, decoded.ack);
-        this.HandleOutgoingBinaryMessage(encodedAckMessage);
-        this.log("Derived session keys, encryption now enabled.");
+        //Send our KEX with our public key
+        const client_pub_key = this.ecdh.getPublicKey(null, "uncompressed");
+        const my_kex_ack_id = this.current_ack++;
+        const client_kex = CryoFrameFormatter
+            .GetFormatter("kexchg")
+            .Serialize(this.sid, my_kex_ack_id, client_pub_key);
+        this.l_crypto_ack = my_kex_ack_id;
+        this.HandleOutgoingBinaryMessage(client_kex);
+        this.log("Client sent KEX, waiting for server ACK before enabling encryption.");
     }
     /*
     * Handle incoming binary messages
