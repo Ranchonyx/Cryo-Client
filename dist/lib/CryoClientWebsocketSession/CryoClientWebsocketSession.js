@@ -177,6 +177,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
             .Serialize(this.sid, decoded.ack);
         //Send our KEX with our public key
         const client_pub_key = this.ecdh.getPublicKey(null, "uncompressed");
+        this.current_ack++;
         const my_kex_ack_id = this.current_ack++;
         const client_kex = CryoFrameFormatter
             .GetFormatter("kexchg")
