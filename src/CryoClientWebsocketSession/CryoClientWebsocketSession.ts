@@ -184,6 +184,11 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
             .Deserialize(message);
 
         const server_pub_key = decoded.payload;
+
+        if(server_pub_key.length !== 65 ||server_pub_key[0] !== 0x04) {
+            throw new Error(`Invalid server public key. Got ${server_pub_key.byteLength} bytes.`)
+        }
+
         const secret = this.ecdh.computeSecret(server_pub_key);
 
         //Make two aes128 hashes from the secret
