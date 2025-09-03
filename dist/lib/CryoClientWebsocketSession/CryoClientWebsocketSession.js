@@ -175,6 +175,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
         //Ack the server's KEX without being encrypted yet
         const encodedAckMessage = this.ack_formatter
             .Serialize(this.sid, decoded.ack);
+        this.HandleOutgoingBinaryMessage(encodedAckMessage);
         //Send our KEX with our public key
         const client_pub_key = this.ecdh.getPublicKey(null, "uncompressed");
         this.current_ack++;

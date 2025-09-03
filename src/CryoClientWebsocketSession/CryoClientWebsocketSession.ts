@@ -147,7 +147,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
 
         this.messages_pending_server_ack.delete(ack_id);
 
-        if(this.l_crypto_ack && ack_id === this.l_crypto_ack) {
+        if (this.l_crypto_ack && ack_id === this.l_crypto_ack) {
             this.l_crypto = new PerSessionCryptoHelper(this.send_key!, this.recv_key!);
             this.l_crypto_ack = null;
             this.log("Got KEX Ack, enabling encryption.")
@@ -195,7 +195,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         const server_pub_key = decoded.payload;
 
         //Basic key checks
-        if(server_pub_key.length !== 65 ||server_pub_key[0] !== 0x04) {
+        if (server_pub_key.length !== 65 || server_pub_key[0] !== 0x04) {
             throw new Error(`Invalid server public key. Got ${server_pub_key.byteLength} bytes.`)
         }
 
@@ -212,6 +212,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         //Ack the server's KEX without being encrypted yet
         const encodedAckMessage = this.ack_formatter
             .Serialize(this.sid, decoded.ack);
+        this.HandleOutgoingBinaryMessage(encodedAckMessage);
 
         //Send our KEX with our public key
         const client_pub_key = this.ecdh.getPublicKey(null, "uncompressed");
