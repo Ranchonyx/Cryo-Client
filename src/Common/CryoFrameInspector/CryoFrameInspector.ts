@@ -1,4 +1,4 @@
-import CryoBinaryMessageFormatterFactory from "../CryoBinaryMessage/CryoBinaryMessageFormatterFactory.js";
+import CryoFrameFormatter from "../CryoBinaryMessage/CryoFrameFormatter.js";
 
 const typeToStringMap = {
     0: "utf8data",
@@ -10,12 +10,12 @@ const typeToStringMap = {
 
 export class CryoFrameInspector {
     public static Inspect(message: Buffer, encoding: BufferEncoding = "utf8"): string {
-        const sid = CryoBinaryMessageFormatterFactory.GetSid(message);
-        const ack = CryoBinaryMessageFormatterFactory.GetAck(message);
-        const type = CryoBinaryMessageFormatterFactory.GetType(message);
+        const sid = CryoFrameFormatter.GetSid(message);
+        const ack = CryoFrameFormatter.GetAck(message);
+        const type = CryoFrameFormatter.GetType(message);
         const type_str = typeToStringMap[type] || "unknown";
 
-        const payload = CryoBinaryMessageFormatterFactory.GetPayload(message, encoding);
+        const payload = CryoFrameFormatter.GetPayload(message, encoding);
 
         return `[${sid},${ack},${type_str},[${payload}]]`
     }
