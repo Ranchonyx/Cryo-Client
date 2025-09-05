@@ -23,16 +23,6 @@ export class CryoHandshakeEngine {
         this.next_ack = next_ack;
         this.events = events;
         this.ecdh.generateKeys();
-    }
-    async start_server_hello() {
-        if (this.handshake_state !== HandshakeState.INITIAL)
-            return;
-        const my_pub_key = this.ecdh.getPublicKey(null, "uncompressed");
-        const ack = this.next_ack();
-        const hello_frame = this.formatter
-            .GetFormatter("server_hello")
-            .Serialize(this.sid, ack, my_pub_key);
-        await this.send_plain(hello_frame);
         this.handshake_state = HandshakeState.WAIT_SERVER_HELLO;
     }
     async on_server_hello(frame) {
