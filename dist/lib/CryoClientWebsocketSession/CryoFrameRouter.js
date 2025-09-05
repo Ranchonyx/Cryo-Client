@@ -1,4 +1,4 @@
-import { BinaryMessageType } from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
+import CryoFrameFormatter, { BinaryMessageType } from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
 import { CreateDebugLogger } from "../Common/Util/CreateDebugLogger.js";
 export class CryoFrameRouter {
     formatter;
@@ -21,20 +21,25 @@ export class CryoFrameRouter {
         this.handlers = handlers;
         this.log = log;
     }
-    try_get_type(buf) {
-        if (!buf || buf.length < 21)
+    try_get_type(frame) {
+        try {
+            return CryoFrameFormatter.GetType(frame);
+        }
+        catch (e) {
             return null;
-        const type_byte = buf.readUint8(20);
-        return type_byte <= BinaryMessageType.HANDSHAKE_DONE ? type_byte : null;
+        }
+        /*        if(!buf || buf.length < 21)
+                    return null;
+
+                const type_byte = buf.readUint8(20);
+                return type_byte <= BinaryMessageType.HANDSHAKE_DONE ? type_byte as BinaryMessageType : null;*/
     }
     async do_route(raw) {
         let frame = raw;
-        let type = null;
-        type = this.try_get_type(raw);
+        let type = this.try_get_type(raw);
         if (type === null && this.is_secure()) {
             try {
-                const decrypted = this.decrypt(raw);
-                frame = decrypted;
+                frame = this.decrypt(raw);
                 type = this.try_get_type(frame);
             }
             catch (e) {

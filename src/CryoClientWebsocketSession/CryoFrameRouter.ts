@@ -32,26 +32,29 @@ export class CryoFrameRouter {
         private readonly decrypt: (buffer: Buffer) => Buffer,
         private readonly handlers: RouterHandlers,
         private log: DebugLoggerFunction = CreateDebugLogger("CRYO_FRAME_ROUTER")
-    ) {}
+    ) {
+    }
 
-    private try_get_type(buf: Buffer): BinaryMessageType | null {
-        if(!buf || buf.length < 21)
+    private try_get_type(frame: Buffer): BinaryMessageType | null {
+        try {
+            return CryoFrameFormatter.GetType(frame);
+        } catch (e) {
             return null;
+        }
+        /*        if(!buf || buf.length < 21)
+                    return null;
 
-        const type_byte = buf.readUint8(20);
-        return type_byte <= BinaryMessageType.HANDSHAKE_DONE ? type_byte as BinaryMessageType : null;
+                const type_byte = buf.readUint8(20);
+                return type_byte <= BinaryMessageType.HANDSHAKE_DONE ? type_byte as BinaryMessageType : null;*/
     }
 
     public async do_route(raw: Buffer): Promise<void> {
         let frame: Buffer = raw;
-        let type: BinaryMessageType | null = null;
+        let type: BinaryMessageType | null = this.try_get_type(raw);
 
-        type = this.try_get_type(raw);
-        if(type === null && this.is_secure()) {
+        if (type === null && this.is_secure()) {
             try {
-                const decrypted = this.decrypt(raw);
-                frame = decrypted;
-
+                frame = this.decrypt(raw);
                 type = this.try_get_type(frame);
             } catch (e) {
                 this.log(`Decryption failed: ${e}`, raw);
@@ -59,7 +62,7 @@ export class CryoFrameRouter {
             }
         }
 
-        if(type === null) {
+        if (type === null) {
             this.log(`Unknown frame type`, raw);
             return;
         }
