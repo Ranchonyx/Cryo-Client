@@ -1,6 +1,6 @@
 import EventEmitter from "node:events";
 import { AckTracker } from "../Common/AckTracker/AckTracker.js";
-import CryoFrameFormatter from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
+import CryoFrameFormatter, { BinaryMessageType } from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
 import { CryoFrameInspector } from "../Common/CryoFrameInspector/CryoFrameInspector.js";
 import { randomUUID } from "node:crypto";
 import { CreateDebugLogger } from "../Common/Util/CreateDebugLogger.js";
@@ -41,7 +41,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
             onSecure: ({ transmit_key, receive_key }) => {
                 this.crypto = new CryoCryptoBox(transmit_key, receive_key);
                 this.log("Channel secured.");
-                this.emit("connected"); // only fire once we’re secure
+                this.emit("connected"); // only emit once we’re secure
             },
             onFailure: (reason) => {
                 this.log(`Handshake failure: ${reason}`);
@@ -97,11 +97,14 @@ export class CryoClientWebsocketSession extends EventEmitter {
     * */
     HandleOutgoingBinaryMessage(outgoing_message) {
         //Create a pending message with a new ack number and queue it for acknowledgement by the server
-        const message_ack = CryoFrameFormatter.GetAck(outgoing_message);
-        this.server_ack_tracker.Track(message_ack, {
-            timestamp: Date.now(),
-            message: outgoing_message
-        });
+        const type = CryoFrameFormatter.GetType(outgoing_message);
+        if (type === BinaryMessageType.UTF8DATA || type === BinaryMessageType.BINARYDATA) {
+            const message_ack = CryoFrameFormatter.GetAck(outgoing_message);
+            this.server_ack_tracker.Track(message_ack, {
+                timestamp: Date.now(),
+                message: outgoing_message
+            });
+        }
         //Send the message buffer to the server
         if (!this.socket)
             return;
