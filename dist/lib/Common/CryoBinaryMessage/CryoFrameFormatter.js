@@ -1,11 +1,14 @@
+import Guard from "../Util/Guard.js";
 export var BinaryMessageType;
 (function (BinaryMessageType) {
-    BinaryMessageType[BinaryMessageType["UTF8DATA"] = 0] = "UTF8DATA";
-    BinaryMessageType[BinaryMessageType["ACK"] = 1] = "ACK";
+    BinaryMessageType[BinaryMessageType["ACK"] = 0] = "ACK";
+    BinaryMessageType[BinaryMessageType["ERROR"] = 1] = "ERROR";
     BinaryMessageType[BinaryMessageType["PING_PONG"] = 2] = "PING_PONG";
-    BinaryMessageType[BinaryMessageType["ERROR"] = 3] = "ERROR";
+    BinaryMessageType[BinaryMessageType["UTF8DATA"] = 3] = "UTF8DATA";
     BinaryMessageType[BinaryMessageType["BINARYDATA"] = 4] = "BINARYDATA";
-    BinaryMessageType[BinaryMessageType["KEXCHG"] = 5] = "KEXCHG";
+    BinaryMessageType[BinaryMessageType["SERVER_HELLO"] = 5] = "SERVER_HELLO";
+    BinaryMessageType[BinaryMessageType["CLIENT_HELLO"] = 6] = "CLIENT_HELLO";
+    BinaryMessageType[BinaryMessageType["HANDSHAKE_DONE"] = 7] = "HANDSHAKE_DONE";
 })(BinaryMessageType || (BinaryMessageType = {}));
 class BufferUtil {
     static sidFromBuffer(buffer) {
@@ -77,7 +80,7 @@ class UTF8FrameFormatter {
         const type = value.readUint8(20);
         const payload = value.subarray(21).toString("utf8");
         if (type !== BinaryMessageType.UTF8DATA)
-            throw new Error("Attempt to deserialize a non-data binary message!");
+            throw new Error("Attempt to deserialize a non-data utf8 message!");
         return {
             sid,
             ack,
@@ -146,14 +149,14 @@ class ErrorFrameFormatter {
         return msg_buf;
     }
 }
-class KeyExchangeFrameFormatter {
+class ServerHelloFrameFormatter {
     Deserialize(value) {
         const sid = BufferUtil.sidFromBuffer(value);
         const ack = value.readUInt32BE(16);
         const type = value.readUint8(20);
         const payload = value.subarray(21);
-        if (type !== BinaryMessageType.KEXCHG)
-            throw new Error("Attempt to deserialize a non-kexchg binary message!");
+        if (type !== BinaryMessageType.SERVER_HELLO)
+            throw new Error("Attempt to deserialize a non-server_hello message!");
         return {
             sid,
             ack,
@@ -162,16 +165,72 @@ class KeyExchangeFrameFormatter {
         };
     }
     Serialize(sid, ack, payload) {
-        const payload_length = payload ? payload.byteLength : 4;
-        const msg_buf = Buffer.alloc(16 + 4 + 1 + payload_length);
+        Guard.CastAssert(payload, payload !== null, "payload was null!");
+        if (payload.byteLength !== 65)
+            throw new Error("Payload in ServerHelloMessage must be exactly 65 bytes!");
+        const msg_buf = Buffer.alloc(16 + 4 + 1 + 65);
         const sid_buf = BufferUtil.sidToBuffer(sid);
         sid_buf.copy(msg_buf, 0);
         msg_buf.writeUInt32BE(ack, 16);
-        msg_buf.writeUint8(BinaryMessageType.KEXCHG, 20);
-        msg_buf.set(payload || Buffer.from("null", "utf-8"), 21);
+        msg_buf.writeUint8(BinaryMessageType.SERVER_HELLO, 20);
+        msg_buf.set(payload, 21);
         return msg_buf;
     }
 }
+class ClientHelloFrameFormatter {
+    Deserialize(value) {
+        const sid = BufferUtil.sidFromBuffer(value);
+        const ack = value.readUInt32BE(16);
+        const type = value.readUint8(20);
+        const payload = value.subarray(21);
+        if (type !== BinaryMessageType.CLIENT_HELLO)
+            throw new Error("Attempt to deserialize a non-client_hello message!");
+        return {
+            sid,
+            ack,
+            type,
+            payload
+        };
+    }
+    Serialize(sid, ack, payload) {
+        Guard.CastAssert(payload, payload !== null, "payload was null!");
+        if (payload.byteLength !== 65)
+            throw new Error("Payload in ClientHelloMessage must be exactly 65 bytes!");
+        const msg_buf = Buffer.alloc(16 + 4 + 1 + 65);
+        const sid_buf = BufferUtil.sidToBuffer(sid);
+        sid_buf.copy(msg_buf, 0);
+        msg_buf.writeUInt32BE(ack, 16);
+        msg_buf.writeUint8(BinaryMessageType.CLIENT_HELLO, 20);
+        msg_buf.set(payload, 21);
+        return msg_buf;
+    }
+}
+class HandshakeDoneFrameFormatter {
+    Deserialize(value) {
+        const sid = BufferUtil.sidFromBuffer(value);
+        const ack = value.readUInt32BE(16);
+        const type = value.readUint8(20);
+        const payload = value.subarray(21).toString("utf8");
+        if (type !== BinaryMessageType.HANDSHAKE_DONE)
+            throw new Error("Attempt to deserialize a non-handshake_done message!");
+        return {
+            sid,
+            ack,
+            type,
+            payload
+        };
+    }
+    Serialize(sid, ack, payload) {
+        const msg_buf = Buffer.alloc(16 + 4 + 1 + (payload?.length || 4));
+        const sid_buf = BufferUtil.sidToBuffer(sid);
+        sid_buf.copy(msg_buf, 0);
+        msg_buf.writeUInt32BE(ack, 16);
+        msg_buf.writeUint8(BinaryMessageType.HANDSHAKE_DONE, 20);
+        msg_buf.write(payload || "null", 21);
+        return msg_buf;
+    }
+}
+//noinspection JSUnusedGlobalSymbols
 export default class CryoFrameFormatter {
     static GetFormatter(type) {
         switch (type) {
@@ -190,16 +249,22 @@ export default class CryoFrameFormatter {
             case "binarydata":
             case BinaryMessageType.BINARYDATA:
                 return new BinaryFrameFormatter();
-            case BinaryMessageType.KEXCHG:
-            case "kexchg":
-                return new KeyExchangeFrameFormatter();
+            case BinaryMessageType.SERVER_HELLO:
+            case "server_hello":
+                return new ServerHelloFrameFormatter();
+            case BinaryMessageType.CLIENT_HELLO:
+            case "client_hello":
+                return new ClientHelloFrameFormatter();
+            case BinaryMessageType.HANDSHAKE_DONE:
+            case "handshake_done":
+                return new HandshakeDoneFrameFormatter();
             default:
                 throw new Error(`Binary message format for type '${type}' is not supported!`);
         }
     }
     static GetType(message) {
         const type = message.readUint8(20);
-        if (type > BinaryMessageType.KEXCHG)
+        if (type > BinaryMessageType.HANDSHAKE_DONE)
             throw new Error(`Unable to decode type from message ${message}. MAX_TYPE = 5, got ${type} !`);
         return type;
     }

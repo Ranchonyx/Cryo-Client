@@ -8,6 +8,9 @@ import {DebugLoggerFunction} from "node:util";
 import {CreateDebugLogger} from "../Common/Util/CreateDebugLogger.js";
 import WebSocket from "ws";
 import {PerSessionCryptoHelper} from "../Common/CryptoHelper/CryptoHelper.js";
+import {CryoCryptoBox} from "./CryoCryptoBox.js";
+import {CryoHandshakeEngine, HandshakeEvents} from "./CryoHandshakeEngine.js";
+import {CryoFrameRouter} from "./CryoFrameRouter.js";
 
 export interface CryoClientWebsocketSession {
     on<U extends keyof ICryoClientWebsocketSessionEvents>(event: U, listener: ICryoClientWebsocketSessionEvents[U]): this;
@@ -29,27 +32,57 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     private readonly utf8_formatter = CryoFrameFormatter.GetFormatter("utf8data");
     private readonly binary_formatter = CryoFrameFormatter.GetFormatter("binarydata");
 
-    private readonly ecdh: ECDH = createECDH("prime256v1");
-    private recv_key: Buffer | null = null;
-    private send_key: Buffer | null = null;
-    private l_crypto_ack: number | null = null;
-    private l_crypto: PerSessionCryptoHelper | null = null;
-
+    private crypto: CryoCryptoBox | null = null;
+    private handshake: CryoHandshakeEngine;
+    private router: CryoFrameRouter;
 
     private constructor(private host: string, private sid: UUID, private socket: WebSocket, private timeout: number, private bearer: string, private log: DebugLoggerFunction = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
         super();
+        const handshake_events: HandshakeEvents = {
+            onSecure: ({transmit_key, receive_key}) => {
+                this.crypto = new CryoCryptoBox(transmit_key, receive_key);
+                this.log("Channel secured.");
+                this.emit("connected"); // only fire once we’re secure
+            },
+            onFailure: (reason: string) => {
+                this.log(`Handshake failure: ${reason}`);
+                this.Destroy();
+            }
+        };
+
+
+        this.handshake = new CryoHandshakeEngine(
+            this.sid,
+            async (buf) => this.socket.send(buf), // raw plaintext send
+            CryoFrameFormatter,
+            () => this.current_ack++,
+            handshake_events,
+        );
+
+        this.router = new CryoFrameRouter(
+            CryoFrameFormatter,
+            () => this.secure,
+            (b) => this.crypto!.decrypt(b),
+            {
+                on_ping_pong: async (b) => this.HandlePingPongMessage(b),
+                on_ack: async (b) => this.HandleAckMessage(b),
+                on_error: async (b) => this.HandleErrorMessage(b),
+                on_utf8: async (b) => this.HandleUTF8DataMessage(b),
+                on_binary: async (b) => this.HandleBinaryDataMessage(b),
+
+                on_server_hello: async (b) => this.handshake.on_server_hello(b),
+                on_handshake_done: async (b) => this.handshake.on_server_handshake_done(b)
+            }
+        );
+
         this.AttachListenersToSocket(socket);
-        this.ecdh.generateKeys();
     }
 
     private AttachListenersToSocket(socket: WebSocket) {
-        socket.on("message", this.HandleIncomingBinaryMessage.bind(this));
+        socket.on("message", async (raw: Buffer) => {
+            await this.router.do_route(raw);
+        });
 
-        setImmediate(() => this.emit("connected"));
-
-        /*
-                socket.on("message", this.HandleIncomingBinaryMessage.bind(this));
-        */
         socket.on("error", this.HandleError.bind(this));
         socket.on("close", this.HandleClose.bind(this));
     }
@@ -86,25 +119,25 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     /*
     * Handle an outgoing binary message
     * */
-    private HandleOutgoingBinaryMessage(ougoing_message: Buffer): void {
+    private HandleOutgoingBinaryMessage(outgoing_message: Buffer): void {
         //Create a pending message with a new ack number and queue it for acknowledgement by the server
-        const message_ack = CryoFrameFormatter.GetAck(ougoing_message);
+        const message_ack = CryoFrameFormatter.GetAck(outgoing_message);
         this.server_ack_tracker.Track(message_ack, {
             timestamp: Date.now(),
-            message: ougoing_message
+            message: outgoing_message
         });
 
         //Send the message buffer to the server
         if (!this.socket)
             return;
 
-        const message = this.secure ? this.l_crypto!.encrypt(ougoing_message) : ougoing_message;
+        const message = this.secure ? this.crypto!.encrypt(outgoing_message) : outgoing_message;
         this.socket.send(message, (maybe_error) => {
             if (maybe_error)
                 this.HandleError(maybe_error);
         });
 
-        this.log(`Sent ${CryoFrameInspector.Inspect(ougoing_message)} to server.`);
+        this.log(`Sent ${CryoFrameInspector.Inspect(outgoing_message)} to server.`);
     }
 
     /*
@@ -136,8 +169,8 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     private async HandleAckMessage(message: Buffer): Promise<void> {
         const decodedAckMessage = this.ack_formatter
             .Deserialize(message);
-
         const ack_id = decodedAckMessage.ack;
+
         const found_message = this.server_ack_tracker.Confirm(ack_id);
 
         if (!found_message) {
@@ -146,13 +179,6 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         }
 
         this.messages_pending_server_ack.delete(ack_id);
-
-        if (this.l_crypto_ack && ack_id === this.l_crypto_ack) {
-            this.l_crypto = new PerSessionCryptoHelper(this.send_key!, this.recv_key!);
-            this.l_crypto_ack = null;
-            this.log("Got KEX Ack, enabling encryption.")
-        }
-
         this.log(`Got ACK ${ack_id} from server.`);
     }
 
@@ -186,77 +212,6 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
 
         this.HandleOutgoingBinaryMessage(encodedAckMessage);
         this.emit("message-binary", payload);
-    }
-
-    private async HandleKeyExchangeMessage(message: Buffer): Promise<void> {
-        const decoded = CryoFrameFormatter
-            .GetFormatter("kexchg")
-            .Deserialize(message);
-        const server_pub_key = decoded.payload;
-
-        //Basic key checks
-        if (server_pub_key.length !== 65 || server_pub_key[0] !== 0x04) {
-            throw new Error(`Invalid server public key. Got ${server_pub_key.byteLength} bytes.`)
-        }
-
-        //Derive keys
-        const secret = this.ecdh.computeSecret(server_pub_key);
-        const hash = createHash("sha256")
-            .update(secret)
-            .digest();
-
-        //We sent with second half, receive with first half (opposite of server)
-        this.recv_key = hash.subarray(0, 16);
-        this.send_key = hash.subarray(16, 32);
-
-        //Ack the server's KEX without being encrypted yet
-        const encodedAckMessage = this.ack_formatter
-            .Serialize(this.sid, decoded.ack);
-        this.HandleOutgoingBinaryMessage(encodedAckMessage);
-
-        //Send our KEX with our public key
-        const client_pub_key = this.ecdh.getPublicKey(null, "uncompressed");
-        this.current_ack++;
-        const my_kex_ack_id = this.current_ack++;
-        const client_kex = CryoFrameFormatter
-            .GetFormatter("kexchg")
-            .Serialize(this.sid, my_kex_ack_id, client_pub_key);
-
-        this.l_crypto_ack = my_kex_ack_id;
-        this.HandleOutgoingBinaryMessage(client_kex);
-        this.log("Client sent KEX, waiting for server ACK before enabling encryption.");
-    }
-
-    /*
-    * Handle incoming binary messages
-    * */
-    private async HandleIncomingBinaryMessage(incoming_message: Buffer): Promise<void> {
-        const message = this.secure ? this.l_crypto!.decrypt(incoming_message) : incoming_message;
-        const message_type = CryoFrameFormatter.GetType(message);
-        this.log(`Received ${CryoFrameInspector.Inspect(message)} from server.`);
-
-        switch (message_type) {
-            case BinaryMessageType.PING_PONG:
-                await this.HandlePingPongMessage(message);
-                return;
-            case BinaryMessageType.ERROR:
-                await this.HandleErrorMessage(message);
-                return;
-            case BinaryMessageType.ACK:
-                await this.HandleAckMessage(message);
-                return;
-            case BinaryMessageType.UTF8DATA:
-                await this.HandleUTF8DataMessage(message);
-                return;
-            case BinaryMessageType.BINARYDATA:
-                await this.HandleBinaryDataMessage(message);
-                return;
-            case BinaryMessageType.KEXCHG:
-                await this.HandleKeyExchangeMessage(message);
-                return;
-            default:
-                throw new Error(`Handle binary message type ${message_type}!`);
-        }
     }
 
     private async HandleError(err: Error) {
@@ -340,7 +295,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     }
 
     public get secure(): boolean {
-        return this.l_crypto !== null;
+        return this.crypto !== null;
     }
 
     public get session_id(): UUID {

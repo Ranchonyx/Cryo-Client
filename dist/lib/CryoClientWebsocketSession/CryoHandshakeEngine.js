@@ -1,0 +1,75 @@
+import { createECDH, createHash } from "node:crypto";
+import CryoFrameFormatter from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
+export var HandshakeState;
+(function (HandshakeState) {
+    HandshakeState[HandshakeState["INITIAL"] = 0] = "INITIAL";
+    HandshakeState[HandshakeState["WAIT_SERVER_HELLO"] = 1] = "WAIT_SERVER_HELLO";
+    HandshakeState[HandshakeState["WAIT_SERVER_DONE"] = 2] = "WAIT_SERVER_DONE";
+    HandshakeState[HandshakeState["SECURE"] = 3] = "SECURE";
+})(HandshakeState || (HandshakeState = {}));
+export class CryoHandshakeEngine {
+    sid;
+    send_plain;
+    formatter;
+    next_ack;
+    events;
+    ECDH_CURVE_NAME = "prime256v1";
+    handshake_state = HandshakeState.INITIAL;
+    ecdh = createECDH(this.ECDH_CURVE_NAME);
+    constructor(sid, send_plain, formatter, next_ack, events) {
+        this.sid = sid;
+        this.send_plain = send_plain;
+        this.formatter = formatter;
+        this.next_ack = next_ack;
+        this.events = events;
+        this.ecdh.generateKeys();
+    }
+    async start_server_hello() {
+        if (this.handshake_state !== HandshakeState.INITIAL)
+            return;
+        const my_pub_key = this.ecdh.getPublicKey(null, "uncompressed");
+        const ack = this.next_ack();
+        const hello_frame = this.formatter
+            .GetFormatter("server_hello")
+            .Serialize(this.sid, ack, my_pub_key);
+        await this.send_plain(hello_frame);
+        this.handshake_state = HandshakeState.WAIT_SERVER_HELLO;
+    }
+    async on_server_hello(frame) {
+        if (this.handshake_state !== HandshakeState.WAIT_SERVER_HELLO) {
+            this.events.onFailure(`CLIENT_HELLO received while in state ${this.handshake_state}`);
+            return;
+        }
+        const decoded = CryoFrameFormatter
+            .GetFormatter("server_hello")
+            .Deserialize(frame);
+        const server_pub_key = decoded.payload;
+        //Derive the keys
+        const secret = this.ecdh.computeSecret(server_pub_key);
+        const hash = createHash("sha256").update(secret).digest();
+        const transmit_key = hash.subarray(16, 32);
+        const receive_key = hash.subarray(0, 16);
+        const my_pub_key = this.ecdh.getPublicKey(null, "uncompressed");
+        const ack = this.next_ack();
+        const client_hello = this.formatter
+            .GetFormatter("client_hello")
+            .Serialize(this.sid, ack, my_pub_key);
+        await this.send_plain(client_hello);
+        this.events.onSecure({ receive_key, transmit_key });
+        this.handshake_state = HandshakeState.WAIT_SERVER_DONE;
+    }
+    on_server_handshake_done(frame) {
+        if (this.handshake_state !== HandshakeState.WAIT_SERVER_DONE) {
+            this.events.onFailure(`HANDSHAKE_DONE received while in state ${this.state}`);
+            return;
+        }
+        //Client got our SERVER_HELLO and finished on its side
+        this.handshake_state = HandshakeState.SECURE;
+    }
+    get is_secure() {
+        return this.handshake_state === HandshakeState.SECURE;
+    }
+    get state() {
+        return this.handshake_state;
+    }
+}
