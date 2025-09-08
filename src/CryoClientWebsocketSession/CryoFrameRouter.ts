@@ -13,7 +13,7 @@ interface RouterHandlers {
     //Handshake frame routing should go to the HandshakeEngine
     on_server_hello?: (frame: Buffer) => Promise<void>;
     on_client_hello?: (frame: Buffer) => Promise<void>;
-    on_handshake_done: (frame: Buffer) => Promise<void>;
+    on_handshake_done?: (frame: Buffer) => Promise<void>;
 }
 
 export class CryoFrameRouter {
@@ -90,7 +90,7 @@ export class CryoFrameRouter {
                 await this.handlers.on_client_hello?.(frame);
                 return;
             case BinaryMessageType.HANDSHAKE_DONE:
-                await this.handlers.on_handshake_done(frame);
+                await this.handlers.on_handshake_done?.(frame);
                 return;
             default:
                 this.log(`Unsupported binary message type ${type}!`);

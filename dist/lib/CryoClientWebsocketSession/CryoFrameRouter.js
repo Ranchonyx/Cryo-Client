@@ -74,7 +74,7 @@ export class CryoFrameRouter {
                 await this.handlers.on_client_hello?.(frame);
                 return;
             case BinaryMessageType.HANDSHAKE_DONE:
-                await this.handlers.on_handshake_done(frame);
+                await this.handlers.on_handshake_done?.(frame);
                 return;
             default:
                 this.log(`Unsupported binary message type ${type}!`);

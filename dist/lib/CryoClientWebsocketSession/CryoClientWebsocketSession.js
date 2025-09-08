@@ -17,6 +17,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
     socket;
     timeout;
     bearer;
+    use_cale;
     log;
     messages_pending_server_ack = new Map();
     server_ack_tracker = new AckTracker();
@@ -27,38 +28,52 @@ export class CryoClientWebsocketSession extends EventEmitter {
     utf8_formatter = CryoFrameFormatter.GetFormatter("utf8data");
     binary_formatter = CryoFrameFormatter.GetFormatter("binarydata");
     crypto = null;
-    handshake;
+    handshake = null;
     router;
-    constructor(host, sid, socket, timeout, bearer, log = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
+    constructor(host, sid, socket, timeout, bearer, use_cale = true, log = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
         super();
         this.host = host;
         this.sid = sid;
         this.socket = socket;
         this.timeout = timeout;
         this.bearer = bearer;
+        this.use_cale = use_cale;
         this.log = log;
-        const handshake_events = {
-            onSecure: ({ transmit_key, receive_key }) => {
-                this.crypto = new CryoCryptoBox(transmit_key, receive_key);
-                this.log("Channel secured.");
-                this.emit("connected"); // only emit once we’re secure
-            },
-            onFailure: (reason) => {
-                this.log(`Handshake failure: ${reason}`);
-                this.Destroy();
-            }
-        };
-        this.handshake = new CryoHandshakeEngine(this.sid, async (buf) => this.socket.send(buf), // raw plaintext send
-        CryoFrameFormatter, () => this.current_ack++, handshake_events);
-        this.router = new CryoFrameRouter(CryoFrameFormatter, () => this.handshake.is_secure, (b) => this.crypto.decrypt(b), {
-            on_ping_pong: async (b) => this.HandlePingPongMessage(b),
-            on_ack: async (b) => this.HandleAckMessage(b),
-            on_error: async (b) => this.HandleErrorMessage(b),
-            on_utf8: async (b) => this.HandleUTF8DataMessage(b),
-            on_binary: async (b) => this.HandleBinaryDataMessage(b),
-            on_server_hello: async (b) => this.handshake.on_server_hello(b),
-            on_handshake_done: async (b) => this.handshake.on_server_handshake_done(b)
-        });
+        if (use_cale) {
+            const handshake_events = {
+                onSecure: ({ transmit_key, receive_key }) => {
+                    this.crypto = new CryoCryptoBox(transmit_key, receive_key);
+                    this.log("Channel secured.");
+                    this.emit("connected"); // only emit once we’re secure
+                },
+                onFailure: (reason) => {
+                    this.log(`Handshake failure: ${reason}`);
+                    this.Destroy();
+                }
+            };
+            this.handshake = new CryoHandshakeEngine(this.sid, async (buf) => this.socket.send(buf), // raw plaintext send
+            CryoFrameFormatter, () => this.current_ack++, handshake_events);
+            this.router = new CryoFrameRouter(CryoFrameFormatter, () => this.handshake.is_secure, (b) => this.crypto.decrypt(b), {
+                on_ping_pong: async (b) => this.HandlePingPongMessage(b),
+                on_ack: async (b) => this.HandleAckMessage(b),
+                on_error: async (b) => this.HandleErrorMessage(b),
+                on_utf8: async (b) => this.HandleUTF8DataMessage(b),
+                on_binary: async (b) => this.HandleBinaryDataMessage(b),
+                on_server_hello: async (b) => this.handshake.on_server_hello(b),
+                on_handshake_done: async (b) => this.handshake.on_server_handshake_done(b)
+            });
+        }
+        else {
+            this.log("CALE disabled, running in unencrypted mode.");
+            this.router = new CryoFrameRouter(CryoFrameFormatter, () => false, (b) => b, {
+                on_ping_pong: async (b) => this.HandlePingPongMessage(b),
+                on_ack: async (b) => this.HandleAckMessage(b),
+                on_error: async (b) => this.HandleErrorMessage(b),
+                on_utf8: async (b) => this.HandleUTF8DataMessage(b),
+                on_binary: async (b) => this.HandleBinaryDataMessage(b),
+            });
+            this.emit("connected");
+        }
         this.AttachListenersToSocket(socket);
     }
     AttachListenersToSocket(socket) {
@@ -87,10 +102,10 @@ export class CryoClientWebsocketSession extends EventEmitter {
             });
         });
     }
-    static async Connect(host, bearer, timeout = 5000) {
+    static async Connect(host, bearer, use_cale = true, timeout = 5000) {
         const sid = randomUUID();
         const socket = await CryoClientWebsocketSession.ConstructSocket(host, timeout, bearer, sid);
-        return new CryoClientWebsocketSession(host, sid, socket, timeout, bearer);
+        return new CryoClientWebsocketSession(host, sid, socket, timeout, bearer, use_cale);
     }
     /*
     * Handle an outgoing binary message
@@ -108,7 +123,10 @@ export class CryoClientWebsocketSession extends EventEmitter {
         //Send the message buffer to the server
         if (!this.socket)
             return;
-        const message = this.secure ? this.crypto.encrypt(outgoing_message) : outgoing_message;
+        let message = outgoing_message;
+        if (this.use_cale && this.secure) {
+            message = this.crypto.encrypt(outgoing_message);
+        }
         this.socket.send(message, (maybe_error) => {
             if (maybe_error)
                 this.HandleError(maybe_error);
@@ -238,8 +256,10 @@ export class CryoClientWebsocketSession extends EventEmitter {
             .Serialize(this.sid, new_ack_id, message);
         this.HandleOutgoingBinaryMessage(formatted_message);
     }
+    Close() {
+    }
     get secure() {
-        return this.crypto !== null;
+        return this.use_cale && this.crypto !== null;
     }
     get session_id() {
         return this.sid;

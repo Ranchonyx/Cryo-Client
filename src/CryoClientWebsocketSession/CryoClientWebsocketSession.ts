@@ -1,15 +1,15 @@
-import {ICryoClientWebsocketSessionEvents, PendingBinaryMessage} from "./types/CryoClientWebsocketSession.js";
+import { ICryoClientWebsocketSessionEvents, PendingBinaryMessage } from "./types/CryoClientWebsocketSession.js";
 import EventEmitter from "node:events";
-import {AckTracker} from "../Common/AckTracker/AckTracker.js";
-import CryoFrameFormatter, {BinaryMessageType} from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
-import {CryoFrameInspector} from "../Common/CryoFrameInspector/CryoFrameInspector.js";
-import {randomUUID, UUID} from "node:crypto";
-import {DebugLoggerFunction} from "node:util";
-import {CreateDebugLogger} from "../Common/Util/CreateDebugLogger.js";
+import { AckTracker } from "../Common/AckTracker/AckTracker.js";
+import CryoFrameFormatter, { BinaryMessageType } from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
+import { CryoFrameInspector } from "../Common/CryoFrameInspector/CryoFrameInspector.js";
+import { randomUUID, UUID } from "node:crypto";
+import { DebugLoggerFunction } from "node:util";
+import { CreateDebugLogger } from "../Common/Util/CreateDebugLogger.js";
 import WebSocket from "ws";
-import {CryoCryptoBox} from "./CryoCryptoBox.js";
-import {CryoHandshakeEngine, HandshakeEvents} from "./CryoHandshakeEngine.js";
-import {CryoFrameRouter} from "./CryoFrameRouter.js";
+import { CryoCryptoBox } from "./CryoCryptoBox.js";
+import { CryoHandshakeEngine, HandshakeEvents } from "./CryoHandshakeEngine.js";
+import { CryoFrameRouter } from "./CryoFrameRouter.js";
 
 export interface CryoClientWebsocketSession {
     on<U extends keyof ICryoClientWebsocketSessionEvents>(event: U, listener: ICryoClientWebsocketSessionEvents[U]): this;
@@ -32,47 +32,66 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     private readonly binary_formatter = CryoFrameFormatter.GetFormatter("binarydata");
 
     private crypto: CryoCryptoBox | null = null;
-    private handshake: CryoHandshakeEngine;
+    private handshake: CryoHandshakeEngine | null = null;
     private router: CryoFrameRouter;
 
-    private constructor(private host: string, private sid: UUID, private socket: WebSocket, private timeout: number, private bearer: string, private log: DebugLoggerFunction = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
+    private constructor(private host: string, private sid: UUID, private socket: WebSocket, private timeout: number, private bearer: string, private use_cale: boolean = true, private log: DebugLoggerFunction = CreateDebugLogger("CRYO_CLIENT_SESSION")) {
         super();
-        const handshake_events: HandshakeEvents = {
-            onSecure: ({transmit_key, receive_key}) => {
-                this.crypto = new CryoCryptoBox(transmit_key, receive_key);
-                this.log("Channel secured.");
-                this.emit("connected"); // only emit once we’re secure
-            },
-            onFailure: (reason: string) => {
-                this.log(`Handshake failure: ${reason}`);
-                this.Destroy();
-            }
-        };
+        if (use_cale) {
+            const handshake_events: HandshakeEvents = {
+                onSecure: ({ transmit_key, receive_key }) => {
+                    this.crypto = new CryoCryptoBox(transmit_key, receive_key);
+                    this.log("Channel secured.");
+                    this.emit("connected"); // only emit once we’re secure
+                },
+                onFailure: (reason: string) => {
+                    this.log(`Handshake failure: ${reason}`);
+                    this.Destroy();
+                }
+            };
 
 
-        this.handshake = new CryoHandshakeEngine(
-            this.sid,
-            async (buf) => this.socket.send(buf), // raw plaintext send
-            CryoFrameFormatter,
-            () => this.current_ack++,
-            handshake_events,
-        );
+            this.handshake = new CryoHandshakeEngine(
+                this.sid,
+                async (buf) => this.socket.send(buf), // raw plaintext send
+                CryoFrameFormatter,
+                () => this.current_ack++,
+                handshake_events,
+            );
 
-        this.router = new CryoFrameRouter(
-            CryoFrameFormatter,
-            () => this.handshake.is_secure,
-            (b) => this.crypto!.decrypt(b),
-            {
-                on_ping_pong: async (b) => this.HandlePingPongMessage(b),
-                on_ack: async (b) => this.HandleAckMessage(b),
-                on_error: async (b) => this.HandleErrorMessage(b),
-                on_utf8: async (b) => this.HandleUTF8DataMessage(b),
-                on_binary: async (b) => this.HandleBinaryDataMessage(b),
+            this.router = new CryoFrameRouter(
+                CryoFrameFormatter,
+                () => this.handshake!.is_secure,
+                (b) => this.crypto!.decrypt(b),
+                {
+                    on_ping_pong: async (b) => this.HandlePingPongMessage(b),
+                    on_ack: async (b) => this.HandleAckMessage(b),
+                    on_error: async (b) => this.HandleErrorMessage(b),
+                    on_utf8: async (b) => this.HandleUTF8DataMessage(b),
+                    on_binary: async (b) => this.HandleBinaryDataMessage(b),
 
-                on_server_hello: async (b) => this.handshake.on_server_hello(b),
-                on_handshake_done: async (b) => this.handshake.on_server_handshake_done(b)
-            }
-        );
+                    on_server_hello: async (b) => this.handshake!.on_server_hello(b),
+                    on_handshake_done: async (b) => this.handshake!.on_server_handshake_done(b)
+                }
+            );
+        } else {
+            this.log("CALE disabled, running in unencrypted mode.");
+            this.router = new CryoFrameRouter(
+                CryoFrameFormatter,
+                () => false,
+                (b) => b,
+                {
+                    on_ping_pong: async (b) => this.HandlePingPongMessage(b),
+                    on_ack: async (b) => this.HandleAckMessage(b),
+                    on_error: async (b) => this.HandleErrorMessage(b),
+                    on_utf8: async (b) => this.HandleUTF8DataMessage(b),
+                    on_binary: async (b) => this.HandleBinaryDataMessage(b),
+                }
+            );
+
+            this.emit("connected");
+        }
+
 
         this.AttachListenersToSocket(socket);
     }
@@ -103,16 +122,16 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
                 resolve(sck);
             })
             sck.addEventListener("error", (err) => {
-                reject(new Error(`Error during session initialisation!`, {cause: err}));
+                reject(new Error(`Error during session initialisation!`, { cause: err }));
             });
         })
     }
 
-    public static async Connect(host: string, bearer: string, timeout: number = 5000): Promise<CryoClientWebsocketSession> {
+    public static async Connect(host: string, bearer: string, use_cale: boolean = true, timeout: number = 5000): Promise<CryoClientWebsocketSession> {
         const sid = randomUUID();
 
         const socket = await CryoClientWebsocketSession.ConstructSocket(host, timeout, bearer, sid);
-        return new CryoClientWebsocketSession(host, sid, socket, timeout, bearer);
+        return new CryoClientWebsocketSession(host, sid, socket, timeout, bearer, use_cale);
     }
 
     /*
@@ -133,7 +152,11 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         if (!this.socket)
             return;
 
-        const message = this.secure ? this.crypto!.encrypt(outgoing_message) : outgoing_message;
+        let message = outgoing_message;
+        if (this.use_cale && this.secure) {
+            message = this.crypto!.encrypt(outgoing_message);
+        }
+
         this.socket.send(message, (maybe_error) => {
             if (maybe_error)
                 this.HandleError(maybe_error);
@@ -296,8 +319,12 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         this.HandleOutgoingBinaryMessage(formatted_message);
     }
 
+    public Close(): void {
+
+    }
+
     public get secure(): boolean {
-        return this.crypto !== null;
+        return this.use_cale && this.crypto !== null;
     }
 
     public get session_id(): UUID {
