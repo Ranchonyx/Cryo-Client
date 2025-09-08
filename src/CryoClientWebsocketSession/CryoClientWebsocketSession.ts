@@ -320,7 +320,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     }
 
     public Close(): void {
-
+        this.Destroy(1000, "Client closing.");
     }
 
     public get secure(): boolean {
@@ -331,7 +331,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         return this.sid;
     }
 
-    public Destroy() {
-        this.socket.close();
+    public Destroy(code: number = 1000, message: string = "") {
+        this.socket.close(code, message);
     }
 }

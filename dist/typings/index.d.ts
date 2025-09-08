@@ -30,4 +30,4 @@ export declare class CryoClientWebsocketSession extends EventEmitter implements 
  * @param use_cale - If cALE (application layer encryption) should be enabled
  * @param timeout - How long to wait until the client stops establishing a connection
  * */
-export declare function cryo(host: string, bearer: string, use_cale: boolean, timeout?: number): Promise<CryoClientWebsocketSession>;
+export declare function cryo(host: string, bearer: string, use_cale?: boolean, timeout?: number): Promise<CryoClientWebsocketSession>;
