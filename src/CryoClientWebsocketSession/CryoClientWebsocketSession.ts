@@ -60,7 +60,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
 
         this.router = new CryoFrameRouter(
             CryoFrameFormatter,
-            () => this.secure,
+            () => this.handshake.is_secure,
             (b) => this.crypto!.decrypt(b),
             {
                 on_ping_pong: async (b) => this.HandlePingPongMessage(b),
