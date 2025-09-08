@@ -257,6 +257,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
         this.HandleOutgoingBinaryMessage(formatted_message);
     }
     Close() {
+        this.Destroy(1000, "Client closing.");
     }
     get secure() {
         return this.use_cale && this.crypto !== null;
@@ -264,7 +265,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
     get session_id() {
         return this.sid;
     }
-    Destroy() {
-        this.socket.close();
+    Destroy(code = 1000, message = "") {
+        this.socket.close(code, message);
     }
 }
