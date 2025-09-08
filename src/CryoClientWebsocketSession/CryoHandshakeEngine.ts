@@ -19,6 +19,8 @@ export class CryoHandshakeEngine {
     private readonly ECDH_CURVE_NAME = "prime256v1";
     private handshake_state: HandshakeState = HandshakeState.INITIAL;
     private ecdh = createECDH(this.ECDH_CURVE_NAME);
+    private receive_key: Buffer | null = null;
+    private transmit_key: Buffer | null = null;
 
     public constructor(
         private readonly sid: UUID,
@@ -46,8 +48,8 @@ export class CryoHandshakeEngine {
         //Derive the keys
         const secret = this.ecdh.computeSecret(server_pub_key);
         const hash = createHash("sha256").update(secret).digest();
-        const transmit_key = hash.subarray(16, 32);
-        const receive_key = hash.subarray(0, 16);
+        this.transmit_key = hash.subarray(16, 32);
+        this.receive_key = hash.subarray(0, 16);
 
         const my_pub_key = this.ecdh.getPublicKey(null, "uncompressed");
         const ack = this.next_ack();
@@ -57,19 +59,47 @@ export class CryoHandshakeEngine {
             .Serialize(this.sid, ack, my_pub_key);
 
         await this.send_plain(client_hello);
-
-        this.events.onSecure({receive_key, transmit_key});
-
         this.handshake_state = HandshakeState.WAIT_SERVER_DONE;
     }
 
-    public on_server_handshake_done(frame: Buffer): void {
+    /*
+    *         if (this.handshake_state !== HandshakeState.WAIT_SERVER_DONE) {
+            this.events.onFailure(`HANDSHAKE_DONE received while in state ${this.state}`);
+            return;
+        }
+        console.error("CLIENT GOT SERVER HANDSHAKE!")
+        const decoded = CryoFrameFormatter
+            .GetFormatter("handshake_done")
+            .Deserialize(frame);
+
+        const done = CryoFrameFormatter
+            .GetFormatter("handshake_done")
+            .Serialize(this.sid, decoded.ack, null);
+        await this.send_plain(done);
+
+        this.events.onSecure({receive_key: this.receive_key, transmit_key: this.transmit_key});
+        //Client got our SERVER_HELLO and finished on its side
+        this.handshake_state = HandshakeState.SECURE;
+
+    * */
+    public async on_server_handshake_done(frame: Buffer): Promise<void> {
         if (this.handshake_state !== HandshakeState.WAIT_SERVER_DONE) {
             this.events.onFailure(`HANDSHAKE_DONE received while in state ${this.state}`);
             return;
         }
 
         //Client got our SERVER_HELLO and finished on its side
+        //Now we'll send our handshake_done frame
+        const decoded = CryoFrameFormatter
+            .GetFormatter("handshake_done")
+            .Deserialize(frame);
+
+        const done = CryoFrameFormatter
+            .GetFormatter("handshake_done")
+            .Serialize(this.sid, decoded.ack, null);
+        await this.send_plain(done);
+
+        this.events.onSecure({receive_key: this.receive_key!, transmit_key: this.transmit_key!});
         this.handshake_state = HandshakeState.SECURE;
     }
 
