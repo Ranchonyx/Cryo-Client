@@ -20,7 +20,7 @@ export declare class CryoClientWebsocketSession extends EventEmitter implements 
 
     public SendBinary(message: Buffer): void;
 
-    public Destroy(): void;
+    public Close(): void;
 }
 
 /**
