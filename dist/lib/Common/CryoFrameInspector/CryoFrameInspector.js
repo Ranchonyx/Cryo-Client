@@ -1,9 +1,9 @@
 import CryoFrameFormatter from "../CryoBinaryMessage/CryoFrameFormatter.js";
 const typeToStringMap = {
-    0: "utf8data",
-    1: "ack",
+    0: "ack",
+    1: "error",
     2: "ping/pong",
-    3: "error",
+    3: "utf8data",
     4: "binarydata",
     5: "server_hello",
     6: "client_hello",
