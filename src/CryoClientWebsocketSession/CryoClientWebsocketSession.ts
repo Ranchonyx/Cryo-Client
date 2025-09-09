@@ -1,15 +1,15 @@
-import { ICryoClientWebsocketSessionEvents, PendingBinaryMessage } from "./types/CryoClientWebsocketSession.js";
+import {ICryoClientWebsocketSessionEvents, PendingBinaryMessage} from "./types/CryoClientWebsocketSession.js";
 import EventEmitter from "node:events";
-import { AckTracker } from "../Common/AckTracker/AckTracker.js";
-import CryoFrameFormatter, { BinaryMessageType } from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
-import { CryoFrameInspector } from "../Common/CryoFrameInspector/CryoFrameInspector.js";
-import { randomUUID, UUID } from "node:crypto";
-import { DebugLoggerFunction } from "node:util";
-import { CreateDebugLogger } from "../Common/Util/CreateDebugLogger.js";
+import {AckTracker} from "../Common/AckTracker/AckTracker.js";
+import CryoFrameFormatter, {BinaryMessageType} from "../Common/CryoBinaryMessage/CryoFrameFormatter.js";
+import {CryoFrameInspector} from "../Common/CryoFrameInspector/CryoFrameInspector.js";
+import {randomUUID, UUID} from "node:crypto";
+import {DebugLoggerFunction} from "node:util";
+import {CreateDebugLogger} from "../Common/Util/CreateDebugLogger.js";
 import WebSocket from "ws";
-import { CryoCryptoBox } from "./CryoCryptoBox.js";
-import { CryoHandshakeEngine, HandshakeEvents } from "./CryoHandshakeEngine.js";
-import { CryoFrameRouter } from "./CryoFrameRouter.js";
+import {CryoCryptoBox} from "./CryoCryptoBox.js";
+import {CryoHandshakeEngine, HandshakeEvents} from "./CryoHandshakeEngine.js";
+import {CryoFrameRouter} from "./CryoFrameRouter.js";
 
 export interface CryoClientWebsocketSession {
     on<U extends keyof ICryoClientWebsocketSessionEvents>(event: U, listener: ICryoClientWebsocketSessionEvents[U]): this;
@@ -39,17 +39,16 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
         super();
         if (use_cale) {
             const handshake_events: HandshakeEvents = {
-                onSecure: ({ transmit_key, receive_key }) => {
+                onSecure: ({transmit_key, receive_key}) => {
                     this.crypto = new CryoCryptoBox(transmit_key, receive_key);
                     this.log("Channel secured.");
                     this.emit("connected"); // only emit once we’re secure
                 },
                 onFailure: (reason: string) => {
                     this.log(`Handshake failure: ${reason}`);
-                    this.Destroy();
+                    this.Destroy(1002, "Failure during CALE handshake.");
                 }
             };
-
 
             this.handshake = new CryoHandshakeEngine(
                 this.sid,
@@ -86,6 +85,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
                     on_error: async (b) => this.HandleErrorMessage(b),
                     on_utf8: async (b) => this.HandleUTF8DataMessage(b),
                     on_binary: async (b) => this.HandleBinaryDataMessage(b),
+                    on_server_hello: async (b) => this.Destroy(1002, "CALE Mismatch. The server excepts CALE encryption, which is currently disabled."),
                 }
             );
 
@@ -122,7 +122,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
                 resolve(sck);
             })
             sck.addEventListener("error", (err) => {
-                reject(new Error(`Error during session initialisation!`, { cause: err }));
+                reject(new Error(`Error during session initialisation!`, {cause: err}));
             });
         })
     }
@@ -256,9 +256,10 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     }
 
     private async HandleClose(code: number, reason: Buffer) {
-        this.log(`CryoSocket was closed, code '${code}' (${this.TranslateCloseCode(code)}), reason '${reason.toString("utf8")}' .`);
+        this.log(`Websocket was closed. Code=${code} (${this.TranslateCloseCode(code)}), reason=${reason.toString("utf8")}.`);
 
-        if (code !== 1000) {
+        let back_off_delay = 5000;
+        if (code === 1006 || code === 1011) {
             let current_attempt = 0;
             //If the connection was not normally closed, try to reconnect
             this.log(`Abnormal termination of Websocket connection, attempting to reconnect...`);
@@ -277,8 +278,9 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
                     if (ex instanceof Error) {
                         ///@ts-expect-error
                         const errorCode = ex.cause?.error?.code as string;
-                        console.warn(`Unable to reconnect to '${this.host}'. Error code: '${errorCode}'. Retry attempt ${++current_attempt} / 5 ...`);
-                        await new Promise((resolve) => setTimeout(resolve, 5000));
+                        console.warn(`Unable to reconnect to '${this.host}'. Error code: '${errorCode}'. Retry attempt in ${back_off_delay} ms. Attempt ${current_attempt} / 5`);
+                        await new Promise((resolve) => setTimeout(resolve, back_off_delay));
+                        back_off_delay += current_attempt * 1000;
                     }
                 }
             }
@@ -320,7 +322,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     }
 
     public Close(): void {
-        this.Destroy(1000, "Client closing.");
+        this.Destroy(1000, "Client finished.");
     }
 
     public get secure(): boolean {
@@ -332,6 +334,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
     }
 
     public Destroy(code: number = 1000, message: string = "") {
+        this.log(`Teardown of session. Code=${code}, reason=${message}`);
         this.socket.close(code, message);
     }
 }
