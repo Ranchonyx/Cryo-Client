@@ -72,7 +72,7 @@ export class CryoClientWebsocketSession extends EventEmitter {
                 on_utf8: async (b) => this.HandleUTF8DataMessage(b),
                 on_binary: async (b) => this.HandleBinaryDataMessage(b),
             });
-            this.emit("connected");
+            setImmediate(() => this.emit("connected"));
         }
         this.AttachListenersToSocket(socket);
     }

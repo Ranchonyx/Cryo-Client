@@ -89,7 +89,7 @@ export class CryoClientWebsocketSession extends EventEmitter implements CryoClie
                 }
             );
 
-            this.emit("connected");
+            setImmediate(() => this.emit("connected"));
         }
 
 
