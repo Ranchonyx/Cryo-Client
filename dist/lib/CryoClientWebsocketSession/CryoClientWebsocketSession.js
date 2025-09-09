@@ -71,16 +71,33 @@ export class CryoClientWebsocketSession extends EventEmitter {
                 on_error: async (b) => this.HandleErrorMessage(b),
                 on_utf8: async (b) => this.HandleUTF8DataMessage(b),
                 on_binary: async (b) => this.HandleBinaryDataMessage(b),
-                on_server_hello: async (b) => this.Destroy(1002, "CALE Mismatch. The server excepts CALE encryption, which is currently disabled."),
+                on_server_hello: async (b) => this.Destroy(1002, "CALE Mismatch. The server excepts CALE encryption, which is currently disabled.")
             });
             setImmediate(() => this.emit("connected"));
         }
         this.AttachListenersToSocket(socket);
     }
     AttachListenersToSocket(socket) {
-        socket.on("message", async (raw) => {
-            await this.router.do_route(raw);
-        });
+        if (this.use_cale) {
+            socket.once("message", (raw) => {
+                //If the first read frame IS NOT SERVER_HELLO, fail and die in an explosion.
+                const type = CryoFrameFormatter.GetType(raw);
+                if (type !== BinaryMessageType.SERVER_HELLO) {
+                    this.log(`CALE mismatch: expected SERVER_HELLO, got ${type}`);
+                    this.Destroy(1002, "CALE mismatch: The server has disabled CALE.");
+                    return;
+                }
+                this.router.do_route(raw);
+                socket.on("message", async (msg) => {
+                    await this.router.do_route(msg);
+                });
+            });
+        }
+        else {
+            socket.on("message", async (raw) => {
+                await this.router.do_route(raw);
+            });
+        }
         socket.on("error", this.HandleError.bind(this));
         socket.on("close", this.HandleClose.bind(this));
     }
